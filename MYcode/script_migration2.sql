@@ -97,6 +97,9 @@ FROM logs
 JOIN parameters p ON logs.parameter_id = p.id
 WHERE p.bullet_drift IS NOT NULL;
 
+-- Удаление старой связи в logs
+ALTER TABLE logs DROP COLUMN parameter_id;
+
 DELETE FROM parameters WHERE station_height IS NOT NULL;
 
 -- Удаление старых колонок
@@ -106,9 +109,6 @@ ALTER TABLE parameters DROP COLUMN pressure;
 ALTER TABLE parameters DROP COLUMN wind_direction;
 ALTER TABLE parameters DROP COLUMN wind_speed;
 ALTER TABLE parameters DROP COLUMN bullet_drift;
-
--- Удаление старой связи в logs
-ALTER TABLE logs DROP COLUMN parameter_id;
 
 -- NOT NULL в новые колонки
 
