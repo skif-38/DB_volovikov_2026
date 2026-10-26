@@ -5,32 +5,33 @@ BEGIN
     CREATE OR REPLACE FUNCTION check_params(p_eq_id int, p_list param_type[])
     RETURNS text AS $func$
     DECLARE
-        p_item param_type;
-        v_type record;
-        err_str text := '';
-        v_req int;
+        err_str text;
+        err_invalid text;
+        err_missing text;
     BEGIN
-        -- Проверяем переданные параметры
-        FOREACH p_item IN ARRAY p_list LOOP
-            SELECT * INTO v_type FROM types_parameters WHERE id = p_item.id;
-            
-            -- Проверка на недопустимый параметр
-            IF NOT EXISTS (SELECT 1 FROM equipment_rules WHERE equipment_id = p_eq_id AND param_id = p_item.id) THEN
-                err_str := err_str || 'Недопустимый параметр: ' || v_type.name || '; ';
-            END IF;
+        -- проверка переданных параметров
+        SELECT string_agg(
+            CASE 
+                WHEN er.param_id IS NULL THEN 'Недопустимый параметр: ' || tp.name || '; '
+                WHEN it.val < tp.min_val OR it.val > tp.max_val THEN 'Вне диапазона: ' || tp.name || ' = ' || it.val || '; '
+            END, '')
+        INTO err_invalid
+        FROM unnest(p_list) AS it(id, val)
+        JOIN types_parameters tp ON tp.id = it.id
+        LEFT JOIN equipment_rules er ON er.equipment_id = p_eq_id AND er.param_id = it.id
+        WHERE er.param_id IS NULL OR (it.val < tp.min_val OR it.val > tp.max_val);
 
-            -- Проверка диапазона
-            IF p_item.val < v_type.min_val OR p_item.val > v_type.max_val THEN
-                err_str := err_str || 'Вне диапазона: ' || v_type.name || ' = ' || p_item.val || '; ';
-            END IF;
-        END LOOP;
+        -- Проверяем, что все обязательные параметры переданы, реализовал без циклов
+        SELECT string_agg('Отсутствует параметр: ' || tp.name || '; ', '')
+        INTO err_missing
+        FROM equipment_rules er
+        JOIN types_parameters tp ON tp.id = er.param_id
+        WHERE er.equipment_id = p_eq_id
+          AND NOT EXISTS (
+              SELECT 1 FROM unnest(p_list) AS it(id, val) WHERE it.id = er.param_id
+          );
 
-        -- Проверяем, что все обязательные параметры переданы
-        FOR v_req IN SELECT param_id FROM equipment_rules WHERE equipment_id = p_eq_id LOOP
-            IF NOT EXISTS (SELECT 1 FROM unnest(p_list) WHERE id = v_req) THEN
-                err_str := err_str || 'Отсутствует параметр: ' || (SELECT name FROM types_parameters WHERE id = v_req) || '; ';
-            END IF;
-        END LOOP;
+        err_str := COALESCE(err_invalid, '') || COALESCE(err_missing, '');
 
         IF err_str = '' THEN
             RETURN 'OK';
@@ -40,7 +41,7 @@ BEGIN
     END;
     $func$ LANGUAGE plpgsql;
 
-    -- Функция расчета Метео приближенных
+    -- Функция расчета
     CREATE OR REPLACE FUNCTION get_meteo(p_log_id int)
     RETURNS text AS $func2$
     DECLARE
@@ -59,9 +60,16 @@ BEGIN
 
         -- Получаем данные пачки
         SELECT measured_at INTO v_time FROM logs WHERE id = p_log_id;
-        SELECT param_value INTO v_h FROM parameters WHERE log_id = p_log_id AND param_id = 1;
-        SELECT param_value INTO v_p FROM parameters WHERE log_id = p_log_id AND param_id = 3;
-        SELECT param_value INTO v_t FROM parameters WHERE log_id = p_log_id AND param_id = 2;
+        
+        -- Получаем параметры по названию, а не по ID
+        SELECT 
+            MAX(CASE WHEN tp.name = 'Высота метеопоста' THEN p.param_value END),
+            MAX(CASE WHEN tp.name = 'Давление' THEN p.param_value END),
+            MAX(CASE WHEN tp.name = 'Температура' THEN p.param_value END)
+        INTO v_h, v_p, v_t
+        FROM parameters p
+        JOIN types_parameters tp ON p.param_id = tp.id
+        WHERE p.log_id = p_log_id;
 
         -- ДДЧЧММ
         v_ddchhmm := to_char(v_time, 'DDHH24') || floor(extract(minute from v_time) / 10)::int;

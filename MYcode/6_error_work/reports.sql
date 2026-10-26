@@ -16,6 +16,16 @@ WITH batch_data AS (
     JOIN equipment_types e ON e.id = l.equipment_id
     LEFT JOIN parameters p ON p.log_id = l.id
     GROUP BY l.id, l.equipment_id, e.short_name
+),
+-- Вызываем функцию один раз для пачки
+batch_checked AS (
+    SELECT 
+        log_id,
+        equipment_id,
+        eq_name,
+        height, temp, press, wind_dir, wind_speed, drift,
+        check_params(equipment_id, p_array) AS err_desc
+    FROM batch_data
 )
 SELECT 
     log_id AS "№",
@@ -26,9 +36,9 @@ SELECT
     wind_dir AS "Направление ветра",
     wind_speed AS "Скорость ветра",
     drift AS "Дальность сноса пуль",
-    (check_params(equipment_id, p_array) != 'OK') AS "Флаг: Есть ошибка",
-    check_params(equipment_id, p_array) AS "Описание ошибки"
-FROM batch_data
+    (err_desc != 'OK') AS "Флаг: Есть ошибка",
+    err_desc AS "Описание ошибки"
+FROM batch_checked
 ORDER BY log_id;
 
 -- "Лучший стрелок"
@@ -42,13 +52,21 @@ WITH grouped_logs AS (
     LEFT JOIN parameters p ON p.log_id = l.id
     GROUP BY l.id, l.user_id, l.equipment_id
 ),
+-- Вызываем функцию
+checked_logs AS (
+    SELECT 
+        user_id,
+        log_id,
+        check_params(equipment_id, p_array) AS err_desc
+    FROM grouped_logs
+),
 user_stats AS (
     SELECT 
         u.last_name || ' ' || u.name AS fio,
-        count(gl.log_id) AS total_batches,
-        count(*) FILTER (WHERE check_params(gl.equipment_id, gl.p_array) != 'OK') AS bad_batches
+        count(cl.log_id) AS total_batches,
+        count(*) FILTER (WHERE cl.err_desc != 'OK') AS bad_batches
     FROM users u
-    LEFT JOIN grouped_logs gl ON u.id = gl.user_id
+    LEFT JOIN checked_logs cl ON u.id = cl.user_id
     GROUP BY u.id, u.last_name, u.name
 )
 SELECT 
